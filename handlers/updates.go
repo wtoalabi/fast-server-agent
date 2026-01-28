@@ -549,6 +549,47 @@ func checkUpdatesDnf(c *fiber.Ctx) error {
 // =============================================================================
 
 /**
+ * fixDpkgState fixes dpkg interrupted state before running apt commands.
+ * This handles the error: "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'"
+ *
+ * The function:
+ * 1. Checks if dpkg is in interrupted state
+ * 2. Removes any stale lock files
+ * 3. Runs dpkg --configure -a to fix the state
+ * 4. Runs apt-get -f install to fix broken dependencies
+ */
+func fixDpkgState() {
+	// Check if dpkg is in interrupted state
+	checkResult := executeWithTimeout("sudo apt-get check 2>&1", 15*time.Second)
+	output := checkResult.Output
+
+	needsFix := strings.Contains(output, "dpkg was interrupted") ||
+		strings.Contains(output, "dpkg --configure -a") ||
+		strings.Contains(output, "you must manually run")
+
+	if !needsFix {
+		return
+	}
+
+	// Remove stale lock files that might be blocking
+	executeWithTimeout("sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true", 5*time.Second)
+
+	// Kill any stuck dpkg processes
+	executeWithTimeout("sudo killall -9 dpkg 2>/dev/null || true", 5*time.Second)
+	executeWithTimeout("sudo killall -9 apt-get 2>/dev/null || true", 5*time.Second)
+
+	// Run dpkg --configure -a to fix interrupted state
+	// Use --force-confdef --force-confold to automatically handle config file prompts
+	executeWithTimeout("sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold 2>&1", 300*time.Second)
+
+	// Run apt-get -f install to fix any broken dependencies
+	executeWithTimeout("sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1", 180*time.Second)
+
+	// Update package lists after fixing
+	executeWithTimeout("sudo apt-get update 2>&1", 120*time.Second)
+}
+
+/**
  * ApplyUpdates applies specified updates or all available updates.
  *
  * @param c Fiber context
@@ -585,6 +626,10 @@ func applyUpdatesApt(c *fiber.Ctx, req ApplyUpdateRequest) error {
 	startTime := time.Now()
 	errors := []string{}
 	packagesUpdated := []string{}
+
+	// First, fix any dpkg interrupted state before attempting updates
+	// This handles "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'"
+	fixDpkgState()
 
 	// Build command
 	var cmd string
