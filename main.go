@@ -128,6 +128,8 @@ func parseFlags() Config {
 
 	// About flag to display agent info
 	showAbout := flag.Bool("a", false, "Show about information")
+	// Version flag to display just the version number
+	showVersion := flag.Bool("v", false, "Show version number only")
 
 	flag.IntVar(&config.Port, "port", 3456, "Port to listen on")
 	flag.StringVar(&config.Host, "host", "127.0.0.1", "Host address to bind to")
@@ -150,6 +152,12 @@ func parseFlags() Config {
 	}
 
 	flag.Parse()
+
+	// Handle version flag - output just the version number
+	if *showVersion {
+		fmt.Println(Version)
+		os.Exit(0)
+	}
 
 	// Handle about flag
 	if *showAbout {
