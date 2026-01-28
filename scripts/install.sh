@@ -295,7 +295,7 @@ create_systemd_service() {
     cat > /etc/systemd/system/server-agent.service << EOF
 [Unit]
 Description=Fast Server Management Agent
-Documentation=https://github.com/fast/server-agent
+Documentation=https://github.com/wtoalabi/fast-server-agent
 After=network.target network-online.target
 Wants=network-online.target
 # Start before sshd so watchdog is ready
