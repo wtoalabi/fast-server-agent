@@ -29,14 +29,23 @@ PLATFORMS := linux/amd64 linux/arm64 linux/arm
 
 # Build for current platform
 .PHONY: build
-build:
+build: sync-version
 	@echo "Building $(BINARY_NAME) v$(VERSION)..."
 	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) .
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)"
 
+# Sync VERSION file to install.sh
+.PHONY: sync-version
+sync-version:
+	@echo "Syncing version $(VERSION) to install.sh..."
+	@sed -i.bak 's/^DEFAULT_VERSION=".*"/DEFAULT_VERSION="$(VERSION)"/' scripts/install.sh
+	@sed -i.bak 's/^# @version .*/# @version $(VERSION)/' scripts/install.sh
+	@rm -f scripts/install.sh.bak
+	@echo "Version synced!"
+
 # Build for all platforms
 .PHONY: all
-all: clean
+all: clean sync-version
 	@echo "Building for all platforms..."
 	@mkdir -p $(DIST_DIR)
 	@for platform in $(PLATFORMS); do \
@@ -124,4 +133,5 @@ help:
 	@echo "  make run        Run locally for development"
 	@echo "  make checksums  Generate SHA256 checksums"
 	@echo "  make docker     Build Docker image"
+	@echo "  make sync-version  Sync VERSION to install.sh"
 	@echo "  make help       Show this help"
