@@ -12,10 +12,11 @@
 # Variables
 BINARY_NAME := server-agent
 VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
+BUILD_NUMBER := $(shell cat BUILD_NUMBER 2>/dev/null || echo "0")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GO := go
-GOFLAGS := -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildDate=$(BUILD_DATE) -X main.GitCommit=$(GIT_COMMIT)"
+GOFLAGS := -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildNumber=$(BUILD_NUMBER) -X main.BuildDate=$(BUILD_DATE) -X main.GitCommit=$(GIT_COMMIT)"
 
 # Output directories
 BUILD_DIR := build
@@ -29,10 +30,17 @@ PLATFORMS := linux/amd64 linux/arm64 linux/arm
 
 # Build for current platform
 .PHONY: build
-build: sync-version
-	@echo "Building $(BINARY_NAME) v$(VERSION)..."
+build: increment-build sync-version
+	@echo "Building $(BINARY_NAME) v$(VERSION) (build $(BUILD_NUMBER))..."
 	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) .
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)"
+
+# Increment build number
+.PHONY: increment-build
+increment-build:
+	@echo "Incrementing build number..."
+	@echo $$(($$(cat BUILD_NUMBER 2>/dev/null || echo 0) + 1)) > BUILD_NUMBER
+	@echo "Build number: $$(cat BUILD_NUMBER)"
 
 # Sync VERSION file to install.sh
 .PHONY: sync-version
@@ -45,15 +53,16 @@ sync-version:
 
 # Build for all platforms
 .PHONY: all
-all: clean sync-version
+all: clean increment-build sync-version
 	@echo "Building for all platforms..."
 	@mkdir -p $(DIST_DIR)
-	@for platform in $(PLATFORMS); do \
+	@BUILD_NUM=$$(cat BUILD_NUMBER); \
+	for platform in $(PLATFORMS); do \
 		os=$$(echo $$platform | cut -d'/' -f1); \
 		arch=$$(echo $$platform | cut -d'/' -f2); \
 		output=$(DIST_DIR)/$(BINARY_NAME)-$$os-$$arch; \
-		echo "Building $$os/$$arch..."; \
-		GOOS=$$os GOARCH=$$arch $(GO) build $(GOFLAGS) -o $$output .; \
+		echo "Building $$os/$$arch (build $$BUILD_NUM)..."; \
+		GOOS=$$os GOARCH=$$arch $(GO) build -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildNumber=$$BUILD_NUM -X main.BuildDate=$(BUILD_DATE) -X main.GitCommit=$(GIT_COMMIT)" -o $$output .; \
 		chmod +x $$output; \
 	done
 	@echo "Done! Binaries in $(DIST_DIR)/"

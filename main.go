@@ -47,10 +47,11 @@ import (
 )
 
 // Version information - injected at build time via ldflags
-// Build with: go build -ldflags "-X main.Version=1.0.1 -X main.BuildDate=2026-01-28"
+// Build with: go build -ldflags "-X main.Version=1.0.1 -X main.BuildNumber=1 -X main.BuildDate=2026-01-28"
 var (
-	Version   = "dev"
-	BuildDate = "unknown"
+	Version     = "dev"
+	BuildNumber = "0"
+	BuildDate   = "unknown"
 )
 
 // Config holds the agent configuration
@@ -153,9 +154,9 @@ func parseFlags() Config {
 
 	flag.Parse()
 
-	// Handle version flag - output just the version number
+	// Handle version flag - output version and build number (pipe-separated for parsing)
 	if *showVersion {
-		fmt.Println(Version)
+		fmt.Printf("%s|%s\n", Version, BuildNumber)
 		os.Exit(0)
 	}
 
