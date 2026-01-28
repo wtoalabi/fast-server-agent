@@ -269,6 +269,8 @@ func parseAptLine(line string) *UpdateInfo {
 	// Parse version with epoch
 	parsedNew := parseVersion(newVersion)
 	parsedCurrent := parseVersion(currentVersion)
+	// Note: parsedCurrent is available for comparison if needed
+	_ = parsedCurrent
 
 	return &UpdateInfo{
 		PackageName:    packageName,
@@ -281,8 +283,6 @@ func parseAptLine(line string) *UpdateInfo {
 		Epoch:          parsedNew.Epoch,
 		Release:        parsedNew.Release,
 	}
-	// Note: parsedCurrent is available for comparison if needed
-	_ = parsedCurrent
 }
 
 /**
