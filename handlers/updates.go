@@ -584,31 +584,23 @@ func fixDpkgState() {
 
 	log.Println("WARN: dpkg interrupted state detected, attempting fix...")
 
-	// Combined fix command: remove locks, configure dpkg, fix broken deps
-	// Run as a single command to minimize round trips
-	fixCmd := `
-		sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null;
-		sudo killall -9 dpkg apt-get 2>/dev/null;
-		sleep 1;
-		sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold 2>&1;
-		sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1
-	`
+	// Fix command - DON'T kill processes as that can cause issues
+	// Just remove locks and run dpkg configure
+	fixCmd := `sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; sleep 1; sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1`
+	
 	// Allow up to 120 seconds for the fix (most should complete much faster)
 	fixResult := executeWithTimeout(fixCmd, 120*time.Second)
 
 	if fixResult.Success {
 		log.Println("INFO: dpkg state fixed successfully")
 	} else {
-		log.Printf("WARN: dpkg fix command exited with code %d: %s", fixResult.ExitCode, fixResult.Output[:min(200, len(fixResult.Output))])
+		// Safely truncate output for logging
+		outputLen := len(fixResult.Output)
+		if outputLen > 200 {
+			outputLen = 200
+		}
+		log.Printf("WARN: dpkg fix command exited with code %d: %s", fixResult.ExitCode, fixResult.Output[:outputLen])
 	}
-}
-
-// min returns the smaller of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 /**
