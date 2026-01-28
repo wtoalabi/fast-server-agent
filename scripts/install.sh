@@ -20,7 +20,7 @@
 #   - curl or wget
 #   - openssl (for token generation if not provided)
 #
-# @version 1.0.3
+# @version 1.0.4
 # @author Fast Server Management
 #===============================================================================
 
@@ -32,7 +32,7 @@ set -euo pipefail
 
 # Version is read from VERSION file in repo, or defaults to 1.0.2
 # Can be overridden via environment variable or --version flag
-DEFAULT_VERSION="1.0.3"
+DEFAULT_VERSION="1.0.4"
 AGENT_VERSION="${AGENT_VERSION:-$DEFAULT_VERSION}"
 AGENT_PORT="${AGENT_PORT:-3456}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
@@ -344,7 +344,9 @@ PrivateTmp=false
 # ============================================================================
 LimitNOFILE=65535
 LimitNPROC=4096
-MemoryLimit=128M
+# Memory limit increased to 512M to allow dpkg/apt operations
+# which can temporarily spike memory usage
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target
