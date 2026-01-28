@@ -23,7 +23,7 @@
  * - Minimal CPU overhead
  *
  * @package server-agent
- * @version 1.0.0
+ * @version 1.0.1
  */
 package main
 
@@ -48,8 +48,8 @@ import (
 
 // Version information
 const (
-	Version   = "1.0.0"
-	BuildDate = "2026-01-26"
+	Version   = "1.0.1"
+	BuildDate = "2026-01-28"
 )
 
 // Config holds the agent configuration
