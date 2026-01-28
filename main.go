@@ -332,6 +332,8 @@ func registerRoutes(app *fiber.App, config Config) {
 	api.Get("/updates/reboot-required", handlers.RebootRequired)
 	api.Post("/updates/reboot", handlers.ScheduleReboot)
 	api.Delete("/updates/reboot", handlers.CancelReboot)
+	api.Get("/updates/changelog", handlers.GetChangelog)
+	api.Get("/updates/security", handlers.GetSecurityUpdates)
 
 	// SSH Key Management
 	api.Get("/ssh/keys", handlers.ListSSHKeys)

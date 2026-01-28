@@ -36,6 +36,8 @@ type UpdateInfo struct {
 	Description    string `json:"description,omitempty"`
 	Size           string `json:"size,omitempty"`
 	RequiresReboot bool   `json:"requires_reboot"`
+	Epoch          int    `json:"epoch,omitempty"`         // Version epoch (e.g., 1:2.0.0 has epoch 1)
+	Release        string `json:"release,omitempty"`       // Release suffix (e.g., -4ubuntu5)
 }
 
 // UpdateCheckResult represents the result of an update check
@@ -68,6 +70,31 @@ type ApplyUpdateResult struct {
 	RequiresReboot bool     `json:"requires_reboot"`
 	DurationMs     int64    `json:"duration_ms"`
 	Errors         []string `json:"errors,omitempty"`
+}
+
+// ChangelogResult represents the result of a changelog request
+type ChangelogResult struct {
+	Success   bool   `json:"success"`
+	Package   string `json:"package"`
+	Changelog string `json:"changelog,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// SecurityUpdatesResult represents security-specific updates
+type SecurityUpdatesResult struct {
+	Success        bool         `json:"success"`
+	PackageManager string       `json:"package_manager"`
+	Updates        []UpdateInfo `json:"updates"`
+	Count          int          `json:"count"`
+	Timestamp      int64        `json:"timestamp"`
+}
+
+// ParsedVersion represents a parsed version with epoch
+type ParsedVersion struct {
+	Epoch   int    `json:"epoch"`
+	Version string `json:"version"`
+	Release string `json:"release"`
+	Raw     string `json:"raw"`
 }
 
 // =============================================================================
@@ -239,6 +266,10 @@ func parseAptLine(line string) *UpdateInfo {
 		strings.Contains(strings.ToLower(packageName), "glibc") ||
 		strings.Contains(strings.ToLower(packageName), "libc6")
 
+	// Parse version with epoch
+	parsedNew := parseVersion(newVersion)
+	parsedCurrent := parseVersion(currentVersion)
+
 	return &UpdateInfo{
 		PackageName:    packageName,
 		CurrentVersion: currentVersion,
@@ -247,7 +278,11 @@ func parseAptLine(line string) *UpdateInfo {
 		Type:           updateType,
 		Severity:       severity,
 		RequiresReboot: requiresReboot,
+		Epoch:          parsedNew.Epoch,
+		Release:        parsedNew.Release,
 	}
+	// Note: parsedCurrent is available for comparison if needed
+	_ = parsedCurrent
 }
 
 /**
@@ -299,6 +334,67 @@ func classifyUpdate(packageName, source string) (string, string) {
 
 	// Default
 	return "os_package", "low"
+}
+
+// =============================================================================
+// VERSION PARSING
+// =============================================================================
+
+/**
+ * parseVersion parses a version string with optional epoch and release.
+ * Handles formats like:
+ * - Simple: "1.2.3"
+ * - With epoch: "1:1.2.3" (epoch is 1)
+ * - Debian style: "1:1.2.3-4ubuntu5" (epoch:version-release)
+ * - RPM style: "1.2.3-4.el8"
+ *
+ * @param version Version string to parse
+ * @return ParsedVersion
+ */
+func parseVersion(version string) ParsedVersion {
+	parsed := ParsedVersion{
+		Epoch:   0,
+		Version: version,
+		Release: "",
+		Raw:     version,
+	}
+
+	if version == "" {
+		return parsed
+	}
+
+	working := version
+
+	// Check for epoch (e.g., "1:2.0.0")
+	epochRe := regexp.MustCompile(`^(\d+):(.+)$`)
+	if matches := epochRe.FindStringSubmatch(working); len(matches) > 0 {
+		parsed.Epoch = parseInt(matches[1])
+		working = matches[2]
+	}
+
+	// Check for release suffix (e.g., "1.2.3-4ubuntu5" or "1.2.3-4.el8")
+	// Find the last hyphen that's followed by a release identifier
+	releaseRe := regexp.MustCompile(`^(.+)-([^-]+)$`)
+	if matches := releaseRe.FindStringSubmatch(working); len(matches) > 0 {
+		parsed.Version = matches[1]
+		parsed.Release = matches[2]
+	} else {
+		parsed.Version = working
+	}
+
+	return parsed
+}
+
+/**
+ * parseInt safely parses a string to int, returning 0 on error.
+ *
+ * @param s String to parse
+ * @return int
+ */
+func parseInt(s string) int {
+	var result int
+	fmt.Sscanf(s, "%d", &result)
+	return result
 }
 
 /**
@@ -802,5 +898,374 @@ func RebootRequired(c *fiber.Ctx) error {
 		"success":  true,
 		"required": required,
 		"reason":   reason,
+	})
+}
+// =============================================================================
+// CHANGELOG HANDLER
+// =============================================================================
+
+/**
+ * GetChangelog retrieves changelog information for a package.
+ * Uses apt changelog, dnf updateinfo, or yum changelog depending on the system.
+ *
+ * @param c Fiber context
+ * @return error
+ */
+func GetChangelog(c *fiber.Ctx) error {
+	packageName := c.Query("package")
+	if packageName == "" {
+		return c.Status(400).JSON(ChangelogResult{
+			Success: false,
+			Error:   "Package name is required",
+		})
+	}
+
+	pm := detectPackageManager()
+
+	switch pm {
+	case PMTypeApt:
+		return getChangelogApt(c, packageName)
+	case PMTypeYum:
+		return getChangelogYum(c, packageName)
+	case PMTypeDnf:
+		return getChangelogDnf(c, packageName)
+	default:
+		return c.JSON(ChangelogResult{
+			Success: false,
+			Package: packageName,
+			Error:   "No supported package manager found",
+		})
+	}
+}
+
+/**
+ * getChangelogApt retrieves changelog for a package using apt.
+ *
+ * @param c Fiber context
+ * @param packageName Package name
+ * @return error
+ */
+func getChangelogApt(c *fiber.Ctx, packageName string) error {
+	// Try to get changelog using apt-get changelog
+	cmd := fmt.Sprintf("apt-get changelog %s 2>/dev/null | head -100", packageName)
+	result := executeWithTimeout(cmd, 30*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	// Fallback: try to get from apt-cache showpkg
+	cmd = fmt.Sprintf("apt-cache show %s 2>/dev/null | grep -A5 'Description'", packageName)
+	result = executeWithTimeout(cmd, 10*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	return c.JSON(ChangelogResult{
+		Success: false,
+		Package: packageName,
+		Error:   "Changelog not available",
+	})
+}
+
+/**
+ * getChangelogYum retrieves changelog for a package using yum.
+ *
+ * @param c Fiber context
+ * @param packageName Package name
+ * @return error
+ */
+func getChangelogYum(c *fiber.Ctx, packageName string) error {
+	// Try yum changelog
+	cmd := fmt.Sprintf("yum changelog 1 %s 2>/dev/null", packageName)
+	result := executeWithTimeout(cmd, 30*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" && 
+	   !strings.Contains(result.Output, "No changelogs") {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	// Fallback: try yum updateinfo
+	cmd = fmt.Sprintf("yum updateinfo info %s 2>/dev/null", packageName)
+	result = executeWithTimeout(cmd, 30*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	return c.JSON(ChangelogResult{
+		Success: false,
+		Package: packageName,
+		Error:   "Changelog not available",
+	})
+}
+
+/**
+ * getChangelogDnf retrieves changelog for a package using dnf.
+ *
+ * @param c Fiber context
+ * @param packageName Package name
+ * @return error
+ */
+func getChangelogDnf(c *fiber.Ctx, packageName string) error {
+	// Try dnf updateinfo
+	cmd := fmt.Sprintf("dnf updateinfo info %s 2>/dev/null", packageName)
+	result := executeWithTimeout(cmd, 30*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	// Fallback: try dnf changelog (if available)
+	cmd = fmt.Sprintf("dnf changelog --last %s 2>/dev/null | head -100", packageName)
+	result = executeWithTimeout(cmd, 30*time.Second)
+
+	if result.Success && strings.TrimSpace(result.Output) != "" {
+		return c.JSON(ChangelogResult{
+			Success:   true,
+			Package:   packageName,
+			Changelog: result.Output,
+		})
+	}
+
+	return c.JSON(ChangelogResult{
+		Success: false,
+		Package: packageName,
+		Error:   "Changelog not available",
+	})
+}
+
+// =============================================================================
+// SECURITY UPDATES HANDLER
+// =============================================================================
+
+/**
+ * GetSecurityUpdates returns only security-specific updates.
+ * This provides a filtered view of updates that are security-related.
+ *
+ * @param c Fiber context
+ * @return error
+ */
+func GetSecurityUpdates(c *fiber.Ctx) error {
+	pm := detectPackageManager()
+
+	switch pm {
+	case PMTypeApt:
+		return getSecurityUpdatesApt(c)
+	case PMTypeYum:
+		return getSecurityUpdatesYum(c)
+	case PMTypeDnf:
+		return getSecurityUpdatesDnf(c)
+	default:
+		return c.JSON(SecurityUpdatesResult{
+			Success: false,
+			Updates: []UpdateInfo{},
+			Count:   0,
+		})
+	}
+}
+
+/**
+ * getSecurityUpdatesApt gets security updates using apt.
+ *
+ * @param c Fiber context
+ * @return error
+ */
+func getSecurityUpdatesApt(c *fiber.Ctx) error {
+	timestamp := time.Now().Unix()
+	updates := []UpdateInfo{}
+
+	// Update package lists first
+	executeWithTimeout("sudo apt-get update -qq 2>/dev/null", 120*time.Second)
+
+	// Get only security updates
+	result := executeWithTimeout("apt list --upgradable 2>/dev/null | grep -i security", 60*time.Second)
+
+	if result.Success && result.Output != "" {
+		lines := strings.Split(result.Output, "\n")
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			update := parseAptLine(line)
+			if update != nil {
+				// Override type to security since we filtered for it
+				update.Type = "security"
+				if update.Severity == "low" {
+					update.Severity = "high" // Security updates are at least high
+				}
+				updates = append(updates, *update)
+			}
+		}
+	}
+
+	return c.JSON(SecurityUpdatesResult{
+		Success:        true,
+		PackageManager: "apt",
+		Updates:        updates,
+		Count:          len(updates),
+		Timestamp:      timestamp,
+	})
+}
+
+/**
+ * getSecurityUpdatesYum gets security updates using yum.
+ *
+ * @param c Fiber context
+ * @return error
+ */
+func getSecurityUpdatesYum(c *fiber.Ctx) error {
+	timestamp := time.Now().Unix()
+	updates := []UpdateInfo{}
+
+	// Get security updates
+	result := executeWithTimeout("yum updateinfo list security -q 2>/dev/null", 60*time.Second)
+
+	if result.Success && result.Output != "" {
+		lines := strings.Split(result.Output, "\n")
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			// Parse yum updateinfo output
+			// Format: RHSA-XXXX:XXXX  Important/Critical  package-version.arch
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				packageName := parts[len(parts)-1]
+				severity := "high"
+
+				// Check for severity in output
+				for _, part := range parts {
+					partLower := strings.ToLower(part)
+					if strings.Contains(partLower, "critical") {
+						severity = "critical"
+						break
+					} else if strings.Contains(partLower, "important") {
+						severity = "high"
+					} else if strings.Contains(partLower, "moderate") {
+						severity = "medium"
+					}
+				}
+
+				// Remove arch from package name
+				if idx := strings.LastIndex(packageName, "."); idx > 0 {
+					arch := packageName[idx+1:]
+					if arch == "x86_64" || arch == "noarch" || arch == "i686" {
+						packageName = packageName[:idx]
+					}
+				}
+
+				updates = append(updates, UpdateInfo{
+					PackageName:    packageName,
+					Type:           "security",
+					Severity:       severity,
+					RequiresReboot: strings.Contains(strings.ToLower(packageName), "kernel"),
+				})
+			}
+		}
+	}
+
+	return c.JSON(SecurityUpdatesResult{
+		Success:        true,
+		PackageManager: "yum",
+		Updates:        updates,
+		Count:          len(updates),
+		Timestamp:      timestamp,
+	})
+}
+
+/**
+ * getSecurityUpdatesDnf gets security updates using dnf.
+ *
+ * @param c Fiber context
+ * @return error
+ */
+func getSecurityUpdatesDnf(c *fiber.Ctx) error {
+	timestamp := time.Now().Unix()
+	updates := []UpdateInfo{}
+
+	// Get security updates
+	result := executeWithTimeout("dnf updateinfo list security -q 2>/dev/null", 60*time.Second)
+
+	if result.Success && result.Output != "" {
+		lines := strings.Split(result.Output, "\n")
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "Last metadata") {
+				continue
+			}
+
+			// Parse dnf updateinfo output
+			// Similar format to yum
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				packageName := parts[len(parts)-1]
+				severity := "high"
+
+				// Check for severity in output
+				for _, part := range parts {
+					partLower := strings.ToLower(part)
+					if strings.Contains(partLower, "critical") {
+						severity = "critical"
+						break
+					} else if strings.Contains(partLower, "important") {
+						severity = "high"
+					} else if strings.Contains(partLower, "moderate") {
+						severity = "medium"
+					}
+				}
+
+				// Remove arch from package name
+				if idx := strings.LastIndex(packageName, "."); idx > 0 {
+					arch := packageName[idx+1:]
+					if arch == "x86_64" || arch == "noarch" || arch == "i686" || arch == "aarch64" {
+						packageName = packageName[:idx]
+					}
+				}
+
+				updates = append(updates, UpdateInfo{
+					PackageName:    packageName,
+					Type:           "security",
+					Severity:       severity,
+					RequiresReboot: strings.Contains(strings.ToLower(packageName), "kernel"),
+				})
+			}
+		}
+	}
+
+	return c.JSON(SecurityUpdatesResult{
+		Success:        true,
+		PackageManager: "dnf",
+		Updates:        updates,
+		Count:          len(updates),
+		Timestamp:      timestamp,
 	})
 }
