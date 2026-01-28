@@ -20,7 +20,7 @@
 #   - curl or wget
 #   - openssl (for token generation if not provided)
 #
-# @version 1.0.2
+# @version 1.0.3
 # @author Fast Server Management
 #===============================================================================
 
@@ -32,7 +32,7 @@ set -euo pipefail
 
 # Version is read from VERSION file in repo, or defaults to 1.0.2
 # Can be overridden via environment variable or --version flag
-DEFAULT_VERSION="1.0.2"
+DEFAULT_VERSION="1.0.3"
 AGENT_VERSION="${AGENT_VERSION:-$DEFAULT_VERSION}"
 AGENT_PORT="${AGENT_PORT:-3456}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
