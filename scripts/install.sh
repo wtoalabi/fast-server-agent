@@ -30,8 +30,10 @@ set -euo pipefail
 # CONFIGURATION
 #===============================================================================
 
-# Default values
-AGENT_VERSION="${AGENT_VERSION:-1.0.1}"
+# Version is read from VERSION file in repo, or defaults to 1.0.1
+# Can be overridden via environment variable or --version flag
+DEFAULT_VERSION="1.0.1"
+AGENT_VERSION="${AGENT_VERSION:-$DEFAULT_VERSION}"
 AGENT_PORT="${AGENT_PORT:-3456}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_USER="${AGENT_USER:-root}"

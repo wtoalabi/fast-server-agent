@@ -11,7 +11,7 @@
 
 # Variables
 BINARY_NAME := server-agent
-VERSION := 1.0.0
+VERSION := $(shell cat VERSION 2>/dev/null || echo "dev")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GO := go

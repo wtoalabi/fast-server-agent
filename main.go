@@ -46,10 +46,11 @@ import (
 	"github.com/gofiber/websocket/v2"
 )
 
-// Version information
-const (
-	Version   = "1.0.1"
-	BuildDate = "2026-01-28"
+// Version information - injected at build time via ldflags
+// Build with: go build -ldflags "-X main.Version=1.0.1 -X main.BuildDate=2026-01-28"
+var (
+	Version   = "dev"
+	BuildDate = "unknown"
 )
 
 // Config holds the agent configuration
