@@ -8,6 +8,9 @@ A lightweight, high-performance server management daemon written in Go. Provides
 - **Lightweight**: ~5MB RAM, minimal CPU usage
 - **Secure**: API token authentication, localhost-only by default
 - **Complete**: Command execution, file operations, service management, metrics
+- **SSH Watchdog**: Automatic SSH service monitoring and auto-recovery
+- **WebSocket Support**: Real-time command output streaming
+- **Systemd Integration**: Native systemd watchdog support
 
 ## Architecture
 
@@ -58,14 +61,20 @@ sudo ./scripts/install.sh --token YOUR_TOKEN
 # Build for current platform
 make build
 
-# Build for all platforms (linux/amd64, linux/arm64, linux/arm)
+# Build for all platforms (linux/amd64, linux/arm64, linux/arm) in dist/
 make all
+
+# Clean build artifacts
+make clean
+
+# Install locally to /usr/local/bin
+make install
 
 # Run tests
 make test
 
-# Run locally for development
-make run
+# Run tests with race detector
+make test-race
 ```
 
 ## API Endpoints
@@ -112,6 +121,38 @@ make run
 | GET | `/api/ssh/keys` | List SSH keys |
 | POST | `/api/ssh/keys` | Add SSH key |
 | DELETE | `/api/ssh/keys/:fingerprint` | Remove SSH key |
+
+### Package Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/package/install` | Install package |
+| POST | `/api/package/update` | Update package |
+| POST | `/api/package/remove` | Remove package |
+| POST | `/api/package/list` | List installed packages |
+
+### System Updates
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/updates/check` | Check for available updates |
+| POST | `/api/updates/install` | Install system updates |
+| GET | `/api/updates/history` | Get update history |
+
+### Real-time Monitoring
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| WS | `/ws/exec` | WebSocket for real-time command output |
+| WS | `/ws/metrics` | WebSocket for real-time metrics streaming |
+
+### SSH Watchdog
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/watchdog/status` | Get watchdog status |
+| POST | `/api/watchdog/enable` | Enable SSH watchdog |
+| POST | `/api/watchdog/disable` | Disable SSH watchdog |
 
 ## Usage Examples
 
@@ -216,6 +257,8 @@ Only whitelisted services can be managed:
 | `AGENT_PORT` | Listen port | `3456` |
 | `AGENT_LOG_FILE` | Log file path | `/var/log/server-agent.log` |
 | `AGENT_DEBUG` | Enable debug mode | `false` |
+| `WATCHDOG_ENABLED` | Enable SSH watchdog monitoring | `true` |
+| `WATCHDOG_INTERVAL` | Seconds between watchdog checks | `30` |
 
 ### Command Line Flags
 
@@ -225,7 +268,22 @@ server-agent \
   --port 3456 \
   --token YOUR_TOKEN \
   --log /var/log/server-agent.log \
-  --debug
+  --debug \
+  --watchdog \
+  --watchdog-interval 30
+```
+
+### Configuration File
+
+The install script creates `/etc/server-agent/agent.env`:
+
+```bash
+AGENT_TOKEN=your-64-character-hex-token
+AGENT_HOST=127.0.0.1
+AGENT_PORT=3456
+AGENT_LOG_FILE=/var/log/server-agent.log
+WATCHDOG_ENABLED=true
+WATCHDOG_INTERVAL=30
 ```
 
 ## Systemd Service
@@ -263,16 +321,30 @@ systemctl stop server-agent
 1. Check if running: `systemctl status server-agent`
 2. Check logs: `journalctl -u server-agent -n 50`
 3. Test locally: `curl http://127.0.0.1:3456/`
+4. Verify token is set: `grep AGENT_TOKEN /etc/server-agent/agent.env`
 
 ### Authentication Errors
 
 1. Verify token in `/etc/server-agent/agent.env`
 2. Ensure token matches control panel configuration
 3. Check for whitespace in token
+4. Restart agent after token change: `systemctl restart server-agent`
 
 ### Permission Errors
 
 The agent runs as root by default for full system access. For restricted access, configure sudo rules.
+
+### SSH Watchdog Issues
+
+1. Check watchdog status: `curl -H "X-Agent-Token: YOUR_TOKEN" http://127.0.0.1:3456/api/watchdog/status`
+2. View logs: `journalctl -u server-agent | grep -i watchdog`
+3. Disable if needed: Set `WATCHDOG_ENABLED=false` in `/etc/server-agent/agent.env`
+
+### WebSocket Connection Issues
+
+1. Ensure firewall allows WebSocket upgrades
+2. Check nginx/proxy configuration for WebSocket support
+3. Verify token in WebSocket headers
 
 ## License
 
