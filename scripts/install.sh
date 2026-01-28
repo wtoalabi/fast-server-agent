@@ -20,7 +20,7 @@
 #   - curl or wget
 #   - openssl (for token generation if not provided)
 #
-# @version 1.0.0
+# @version 1.0.1
 # @author Fast Server Management
 #===============================================================================
 
@@ -31,7 +31,7 @@ set -euo pipefail
 #===============================================================================
 
 # Default values
-AGENT_VERSION="${AGENT_VERSION:-1.0.0}"
+AGENT_VERSION="${AGENT_VERSION:-1.0.1}"
 AGENT_PORT="${AGENT_PORT:-3456}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_USER="${AGENT_USER:-root}"
