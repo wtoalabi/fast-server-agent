@@ -14,6 +14,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -559,8 +560,17 @@ func checkUpdatesDnf(c *fiber.Ctx) error {
  * 4. Runs apt-get -f install to fix broken dependencies
  */
 func fixDpkgState() {
-	// Check if dpkg is in interrupted state
-	checkResult := executeWithTimeout("sudo apt-get check 2>&1", 15*time.Second)
+	// Wrap in defer/recover to prevent any panics from crashing the agent
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("WARN: fixDpkgState recovered from panic: %v", r)
+		}
+	}()
+
+	log.Println("INFO: Checking dpkg state...")
+
+	// Check if dpkg is in interrupted state (quick check)
+	checkResult := executeWithTimeout("sudo apt-get check 2>&1", 10*time.Second)
 	output := checkResult.Output
 
 	needsFix := strings.Contains(output, "dpkg was interrupted") ||
@@ -568,25 +578,37 @@ func fixDpkgState() {
 		strings.Contains(output, "you must manually run")
 
 	if !needsFix {
+		log.Println("INFO: dpkg state is healthy, no fix needed")
 		return
 	}
 
-	// Remove stale lock files that might be blocking
-	executeWithTimeout("sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true", 5*time.Second)
+	log.Println("WARN: dpkg interrupted state detected, attempting fix...")
 
-	// Kill any stuck dpkg processes
-	executeWithTimeout("sudo killall -9 dpkg 2>/dev/null || true", 5*time.Second)
-	executeWithTimeout("sudo killall -9 apt-get 2>/dev/null || true", 5*time.Second)
+	// Combined fix command: remove locks, configure dpkg, fix broken deps
+	// Run as a single command to minimize round trips
+	fixCmd := `
+		sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null;
+		sudo killall -9 dpkg apt-get 2>/dev/null;
+		sleep 1;
+		sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold 2>&1;
+		sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1
+	`
+	// Allow up to 120 seconds for the fix (most should complete much faster)
+	fixResult := executeWithTimeout(fixCmd, 120*time.Second)
 
-	// Run dpkg --configure -a to fix interrupted state
-	// Use --force-confdef --force-confold to automatically handle config file prompts
-	executeWithTimeout("sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold 2>&1", 300*time.Second)
+	if fixResult.Success {
+		log.Println("INFO: dpkg state fixed successfully")
+	} else {
+		log.Printf("WARN: dpkg fix command exited with code %d: %s", fixResult.ExitCode, fixResult.Output[:min(200, len(fixResult.Output))])
+	}
+}
 
-	// Run apt-get -f install to fix any broken dependencies
-	executeWithTimeout("sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1", 180*time.Second)
-
-	// Update package lists after fixing
-	executeWithTimeout("sudo apt-get update 2>&1", 120*time.Second)
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 /**
@@ -623,6 +645,8 @@ func ApplyUpdates(c *fiber.Ctx) error {
  * @return error
  */
 func applyUpdatesApt(c *fiber.Ctx, req ApplyUpdateRequest) error {
+	log.Printf("INFO: applyUpdatesApt called with %d packages, dryRun=%v", len(req.Packages), req.DryRun)
+	
 	startTime := time.Now()
 	errors := []string{}
 	packagesUpdated := []string{}
@@ -630,6 +654,8 @@ func applyUpdatesApt(c *fiber.Ctx, req ApplyUpdateRequest) error {
 	// First, fix any dpkg interrupted state before attempting updates
 	// This handles "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'"
 	fixDpkgState()
+
+	log.Println("INFO: dpkg fix complete, building update command...")
 
 	// Build command
 	var cmd string
@@ -660,8 +686,12 @@ func applyUpdatesApt(c *fiber.Ctx, req ApplyUpdateRequest) error {
 		}
 	}
 
+	log.Printf("INFO: Executing update command: %s", cmd)
+
 	// Execute the update
 	result := executeWithTimeout(cmd, 600*time.Second) // 10 minute timeout
+
+	log.Printf("INFO: Update command completed, success=%v, exitCode=%d", result.Success, result.ExitCode)
 
 	if !result.Success {
 		errors = append(errors, result.Output)
