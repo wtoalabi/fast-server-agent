@@ -411,6 +411,9 @@ register_with_panel() {
     local os_info=$(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2 || echo "Linux")
 
     # Send registration request
+    # agent_host tells the control panel how the agent is bound:
+    # - 0.0.0.0: Agent accepts external connections (direct HTTP access mode)
+    # - 127.0.0.1: Agent only accepts localhost connections (SSH tunnel mode)
     local response
     response=$(curl -sSL -X POST "${CONTROL_PANEL_URL}/api/agent/register" \
         -H "Content-Type: application/json" \
@@ -419,12 +422,19 @@ register_with_panel() {
             \"ip_address\": \"${ip_address}\",
             \"os\": \"${os_info}\",
             \"agent_token\": \"${AGENT_TOKEN}\",
+            \"agent_host\": \"${AGENT_HOST}\",
             \"agent_port\": ${AGENT_PORT},
             \"agent_version\": \"${AGENT_VERSION}\"
         }" 2>&1) || true
 
     if echo "$response" | grep -q '"success":true'; then
         log_success "Registered with control panel"
+        # Show connection mode
+        if [[ "${AGENT_HOST}" == "0.0.0.0" ]]; then
+            log_info "Connection mode: Direct HTTP access (fast 50-100ms responses)"
+        else
+            log_info "Connection mode: SSH tunnel (slower, but more secure)"
+        fi
     else
         log_warning "Could not register with control panel (server may not be accessible)"
         log_warning "Please add the server manually in the control panel"
