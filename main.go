@@ -34,6 +34,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,10 +59,13 @@ var (
 type Config struct {
 	// Port to listen on
 	Port int
-	// Host address (127.0.0.1 for local only)
+	// Host address (127.0.0.1 for local only, 0.0.0.0 for all interfaces)
 	Host string
 	// API token for authentication
 	Token string
+	// AllowedIPs is a comma-separated list of IPs allowed to connect
+	// Empty means only token auth is required
+	AllowedIPs string
 	// Log file path
 	LogFile string
 	// Enable debug mode
@@ -135,6 +139,7 @@ func parseFlags() Config {
 	flag.IntVar(&config.Port, "port", 3456, "Port to listen on")
 	flag.StringVar(&config.Host, "host", "127.0.0.1", "Host address to bind to")
 	flag.StringVar(&config.Token, "token", "", "API token (overrides AGENT_TOKEN env)")
+	flag.StringVar(&config.AllowedIPs, "allowed-ips", "", "Comma-separated list of allowed IPs")
 	flag.StringVar(&config.LogFile, "log", "/var/log/server-agent.log", "Log file path")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable debug mode")
 	flag.BoolVar(&config.WatchdogEnabled, "watchdog", true, "Enable SSH watchdog monitoring")
@@ -148,6 +153,7 @@ func parseFlags() Config {
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
 		fmt.Fprintf(os.Stderr, "  AGENT_TOKEN            API token for authentication\n")
+		fmt.Fprintf(os.Stderr, "  AGENT_ALLOWED_IPS      Comma-separated list of allowed IPs\n")
 		fmt.Fprintf(os.Stderr, "  WATCHDOG_ENABLED       Enable SSH watchdog (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  WATCHDOG_INTERVAL      Seconds between watchdog checks\n")
 	}
@@ -169,6 +175,11 @@ func parseFlags() Config {
 	// Token from env if not provided via flag
 	if config.Token == "" {
 		config.Token = os.Getenv("AGENT_TOKEN")
+	}
+
+	// AllowedIPs from env if not provided via flag
+	if config.AllowedIPs == "" {
+		config.AllowedIPs = os.Getenv("AGENT_ALLOWED_IPS")
 	}
 
 	// Watchdog settings from env
@@ -254,6 +265,27 @@ func setupLogging(config Config) {
 }
 
 /**
+ * parseAllowedIPs parses a comma-separated list of IP addresses.
+ *
+ * @param ipList Comma-separated list of IPs
+ * @return []string Slice of trimmed IP addresses
+ */
+func parseAllowedIPs(ipList string) []string {
+	if ipList == "" {
+		return nil
+	}
+	
+	var ips []string
+	for _, ip := range strings.Split(ipList, ",") {
+		ip = strings.TrimSpace(ip)
+		if ip != "" {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
+/**
  * createApp creates and configures the Fiber application.
  *
  * @param config The agent configuration
@@ -293,6 +325,32 @@ func createApp(config Config) *fiber.App {
  * @param config The agent configuration
  */
 func registerRoutes(app *fiber.App, config Config) {
+	// IP whitelist middleware (only if AllowedIPs is set)
+	// This provides an additional layer of security when binding to 0.0.0.0
+	var ipWhitelistMiddleware fiber.Handler
+	if config.AllowedIPs != "" {
+		allowedIPs := parseAllowedIPs(config.AllowedIPs)
+		log.Printf("IP whitelist enabled: %v", allowedIPs)
+		ipWhitelistMiddleware = func(c *fiber.Ctx) error {
+			clientIP := c.IP()
+			// Always allow localhost
+			if clientIP == "127.0.0.1" || clientIP == "::1" {
+				return c.Next()
+			}
+			// Check if client IP is in allowed list
+			for _, ip := range allowedIPs {
+				if clientIP == ip {
+					return c.Next()
+				}
+			}
+			log.Printf("Blocked request from unauthorized IP: %s", clientIP)
+			return c.Status(403).JSON(fiber.Map{
+				"success": false,
+				"error":   "IP not allowed",
+			})
+		}
+	}
+
 	// Auth middleware function
 	authMiddleware := func(c *fiber.Ctx) error {
 		token := c.Get("X-Agent-Token")
@@ -314,8 +372,13 @@ func registerRoutes(app *fiber.App, config Config) {
 		})
 	})
 
-	// API routes (with auth)
-	api := app.Group("/api", authMiddleware)
+	// API routes (with auth, and IP whitelist if configured)
+	var api fiber.Router
+	if ipWhitelistMiddleware != nil {
+		api = app.Group("/api", ipWhitelistMiddleware, authMiddleware)
+	} else {
+		api = app.Group("/api", authMiddleware)
+	}
 
 	// Health & Status
 	api.Get("/health", handlers.HealthCheck)

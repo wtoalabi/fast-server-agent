@@ -36,6 +36,7 @@ DEFAULT_VERSION="1.0.5"
 AGENT_VERSION="${AGENT_VERSION:-$DEFAULT_VERSION}"
 AGENT_PORT="${AGENT_PORT:-3456}"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
+AGENT_ALLOWED_IPS="${AGENT_ALLOWED_IPS:-}"
 AGENT_USER="${AGENT_USER:-root}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/server-agent}"
@@ -153,6 +154,20 @@ parse_args() {
                 AGENT_HOST="$2"
                 shift 2
                 ;;
+            --bind)
+                # Alias for --host for compatibility
+                AGENT_HOST="$2"
+                shift 2
+                ;;
+            --allowed-ip)
+                # Comma-separated list of allowed IPs
+                if [[ -z "${AGENT_ALLOWED_IPS}" ]]; then
+                    AGENT_ALLOWED_IPS="$2"
+                else
+                    AGENT_ALLOWED_IPS="${AGENT_ALLOWED_IPS},$2"
+                fi
+                shift 2
+                ;;
             --control-panel)
                 CONTROL_PANEL_URL="$2"
                 shift 2
@@ -185,6 +200,8 @@ Options:
     --token TOKEN       API token for authentication (auto-generated if not provided)
     --port PORT         Port to listen on (default: 3456)
     --host HOST         Host address to bind to (default: 127.0.0.1)
+    --bind HOST         Alias for --host
+    --allowed-ip IP     IP address allowed to connect (can be used multiple times)
     --control-panel URL Control panel URL for registration
     --version VERSION   Agent version to install (default: ${AGENT_VERSION})
     --help, -h          Show this help message
@@ -284,6 +301,10 @@ WATCHDOG_INTERVAL=30
 
 # Control panel URL (optional)
 CONTROL_PANEL_URL=${CONTROL_PANEL_URL}
+
+# Allowed IPs (comma-separated, empty = allow all authenticated requests)
+# When AGENT_HOST is 0.0.0.0, this SHOULD be set for security
+AGENT_ALLOWED_IPS=${AGENT_ALLOWED_IPS}
 EOF
 
     chmod 600 "${CONFIG_DIR}/agent.env"
@@ -314,6 +335,7 @@ EnvironmentFile=${CONFIG_DIR}/agent.env
 ExecStart=${INSTALL_DIR}/server-agent \\
     --host \${AGENT_HOST} \\
     --port \${AGENT_PORT} \\
+    --allowed-ips \${AGENT_ALLOWED_IPS} \\
     --log \${AGENT_LOG_FILE}
 ExecReload=/bin/kill -HUP \$MAINPID
 
